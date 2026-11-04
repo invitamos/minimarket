@@ -1,0 +1,91 @@
+SISTEMA DE CAJA - MINIMARKET BONANZA Y BODEGA BARLEY
+=====================================================
+
+CÓMO ABRIR
+1. Descomprima la carpeta en la computadora de la caja (por ejemplo en Documentos).
+2. Abra el archivo "index.html" con Google Chrome o Microsoft Edge.
+3. Consejo: cree un acceso directo en el escritorio a index.html.
+   No necesita internet ni instalar nada.
+
+USUARIOS DE PRUEBA
+- Administrador:  usuario admin   / contraseña admin123
+- Cajero:         usuario caja    / contraseña 1234
+Cambie estas contraseñas apenas empiece a usarlo: toque su nombre arriba a la
+derecha (Mi perfil). Ahí también puede poner su foto y cambiar su nombre.
+En la pantalla de ingreso, el ojito muestra u oculta la contraseña.
+
+CÓMO SE SEPARA MINIMARKET Y BODEGA
+- Todo se cobra en la MISMA caja y en el mismo ticket.
+- Cada producto pertenece a un sector, y cada sector es del Minimarket
+  (Bebidas, Lácteos, Alimentos, Carnicería, Panadería) o de la Bodega
+  (Cervezas, Tragos, Hielos, Cantina). Los sectores se editan en Productos > Sectores.
+- El sistema separa solo las ventas, la ganancia, los gastos y el fiado de cada negocio.
+- Color celeste = Minimarket. Color naranja = Bodega.
+
+CAJAS
+- Hay dos cajas: Caja Efectivo y Caja Transferencia (transferencias y tarjetas).
+  Cada una se abre y se cierra con un toque desde el menú Caja. Al cerrar, debajo aparece
+  el resumen del turno: inicial, ingresos, egresos, saldo y lo vendido por cada negocio.
+  Si empezó con dinero de cambio, toque "Cambiar" en Inicial para anotarlo.
+- Ahí se ve lo recaudado del día y del mes (ingreso, egreso y saldo) y se puede
+  descargar el informe en PDF (en la ventana de impresión elija "Guardar como PDF").
+- Consumo interno (menú propio): mercadería que sale del stock sin venderse
+  (consumo del dueño, vencidos, rotos). No suma ni resta en caja.
+
+FORMAS DE PAGO
+- Al cobrar por transferencia o tarjeta se elige el banco y se anota el Nº de comprobante.
+- En el menú Formas de pago se ven los cobros del día y del mes por cada medio.
+
+AVISOS DE STOCK
+- La campanita de arriba muestra los productos que se están terminando o se agotaron.
+- Al vender, el sistema avisa en el momento cuando un producto llega al mínimo.
+- El mínimo de cada producto se elige en Productos > Editar ("Avisar cuando quede").
+
+CATEGORÍAS
+- En el menú Categorías se crean, editan y eliminan las categorías de cada negocio.
+
+TICKET, FACTURA Y WHATSAPP
+- Al cobrar se elige Ticket o Factura. Después del cobro aparece el comprobante con los botones:
+  Imprimir, Hacer factura (convierte el ticket en factura), Descargar PDF y WhatsApp
+  (abre WhatsApp con el detalle listo para enviar; necesita internet).
+  El PDF queda en la carpeta Descargas y se puede adjuntar en WhatsApp.
+- En transferencias se anota banco, Nº de comprobante y el nombre de quien envió.
+- En ventas a crédito el ticket sale con una línea para la firma del cliente.
+- En Configuración se carga dirección, ciudad, RUC, la leyenda y la firma que sale al pie.
+- Facturación electrónica: en Configuración se cargan razón social, timbrado, establecimiento
+  y punto de expedición. Cada producto tiene su IVA (10%, 5% o exenta).
+  Para que la factura tenga validez ante la SET (SIFEN) hace falta el certificado digital y
+  conectar el sistema con un proveedor de facturación electrónica. Los datos ya quedan guardados
+  con ese formato.
+
+CRÉDITO (FIADO)
+- Al cobrar, elija "Crédito" y el cliente. La deuda queda separada:
+  lo que llevó del minimarket y lo que llevó de la bodega.
+- En Créditos > Cobrar se registra el pago de cada cuenta por separado.
+
+INICIO
+En Inicio están los accesos rápidos ordenados por tarea: vender y cobrar, caja y dinero,
+mercadería, clientes e informes. Por ejemplo: consultar precio, último ticket, cargar
+mercadería, productos por terminarse e informe de hoy en PDF.
+
+ATAJOS DE TECLADO
+F1 Inicio · F2 Vender · F3 Buscar producto · F4 Cobrar · F8 Cancelar venta
+Enter en el buscador: agrega el producto (sirve con lector de código de barras).
+Esc: cierra la ventana abierta.
+
+PERMISOS
+- Administrador: entra a todo. Puede haber varios administradores.
+- Usuario: entra solo a las secciones que el administrador le marque.
+
+DATOS DE EJEMPLO
+El sistema viene con ventas, gastos y clientes de ejemplo para ver las estadísticas.
+Para empezar en limpio: Configuración > Borrar movimientos
+(se conservan productos, sectores y usuarios).
+
+MUY IMPORTANTE
+Los datos se guardan dentro del navegador de esta computadora.
+- No borre el historial/datos de navegación del navegador.
+- Use siempre el mismo navegador y la misma carpeta.
+
+IMPRESIÓN DE TICKET
+Marque "Imprimir ticket" al cobrar. Está preparado para impresoras térmicas de 80 mm.
