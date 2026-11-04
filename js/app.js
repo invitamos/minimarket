@@ -285,10 +285,11 @@ function save() {
 const SK = { url: 'bnz_api', tok: 'bnz_tok', ver: 'bnz_ver', base: 'bnz_base', pend: 'bnz_pend' };
 const COLS = ['usuarios', 'sectores', 'productos', 'clientes', 'movimientos', 'ventas', 'gastos', 'cajas', 'consumos'];
 // Servidor donde está api.php (hosting con PHP). Todos los equipos se conectan solos a esta dirección.
-const SERVIDOR = 'https://spynetpy.com/minimarket-api/api.php';
+const SERVIDORES = ['https://spynetpy.com/minimarket-api/api.php', 'https://www.spynetpy.com/minimarket-api/api.php'];
+const SERVIDOR = SERVIDORES[0];
 const urlGuardada = localStorage.getItem(SK.url);
 const SYNC = {
-  url: urlGuardada === 'ninguno' ? '' : urlGuardada || SERVIDOR,
+  url: urlGuardada && urlGuardada !== 'ninguno' ? urlGuardada : SERVIDOR,
   token: localStorage.getItem(SK.tok) || '',
   version: +localStorage.getItem(SK.ver) || 0,
   pend: localStorage.getItem(SK.pend) === '1',
@@ -309,7 +310,7 @@ async function api(action, body = {}, url = SYNC.url) {
   try {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, ...body }), cache: 'no-store', signal: ctl.signal });
     const txt = await r.text();
-    try { return JSON.parse(txt); } catch { throw new Error('El servidor no respondió bien. Revise que api.php esté subido y que el hosting tenga PHP.'); }
+    try { return JSON.parse(txt); } catch { throw new Error(r.status === 404 ? 'no se encontró api.php en la carpeta minimarket-api del hosting.' : 'el hosting respondió algo distinto a lo esperado (' + r.status + '). Revise que api.php esté subido y que tenga PHP.'); }
   } finally { clearTimeout(t); }
 }
 
@@ -439,7 +440,14 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && SY
 async function loginServidor(usuario, hash) {
   if (!SYNC.url) return 'local';
   let r;
-  try { r = await api('login', { usuario, hash }); } catch { return 'local'; }
+  try { r = await api('login', { usuario, hash }); }
+  catch (e) {
+    let ok = false;
+    for (const alt of SERVIDORES.filter((x) => x !== SYNC.url)) {
+      try { r = await api('login', { usuario, hash }, alt); SYNC.url = alt; localStorage.setItem(SK.url, alt); ok = true; break; } catch { /* sigue probando */ }
+    }
+    if (!ok) { SYNC.ultimoError = e.message; return 'local'; }
+  }
   if (r.ok) {
     SYNC.token = r.token;
     if (SYNC.pend && syncBase()) { adoptar(mezclar(syncBase(), db, r.data), r.version); SYNC.pend = true; syncGuardarEstado(); }
@@ -716,11 +724,9 @@ function renderLogin() {
       ${pwField('lp', 'Contraseña', 'input-lg')}
       <div class="login-error" id="lErr"></div>
       <button class="btn btn-primary btn-lg btn-block" type="submit">${ic('lock')}Ingresar</button>
-      <button type="button" class="login-srv" id="svLink">${ic('arrows')}${SYNC.url ? 'Conectado al servidor · cambiar' : 'Conectar con servidor'}</button>
     </form>
   </div>`;
   $('#lu').focus();
-  $('#svLink').onclick = conectarServidor;
   $('#fLogin').onsubmit = async (e) => {
     e.preventDefault();
     const u = $('#lu').value.trim().toLowerCase();
@@ -732,7 +738,8 @@ function renderLogin() {
     if (res === 'inactivo') { $('#lErr').textContent = 'Este usuario está desactivado. Consulte al administrador.'; return; }
     if (res === 'mal') { $('#lErr').textContent = 'Usuario o contraseña incorrectos.'; $('#lp').select(); return; }
     if (res !== 'ok') {
-      $('#lErr').innerHTML = 'No se pudo conectar con el servidor.<br><small>Revise que haya internet y vuelva a intentar. Los datos se guardan solo en el servidor, para que sean los mismos en todos los equipos.</small>';
+      const motivo = SYNC.ultimoError && SYNC.ultimoError !== 'Failed to fetch' && SYNC.ultimoError !== 'Load failed' ? SYNC.ultimoError : (navigator.onLine ? 'el servidor no responde.' : 'no hay internet en este equipo.');
+      $('#lErr').innerHTML = `No se pudo conectar con el servidor: ${esc(motivo)}<br><small>Avise al encargado del sistema. Los datos se guardan solo en el servidor, para que sean iguales en todos los equipos.</small>`;
       return;
     }
     const user = db.usuarios.find((x) => x.usuario.toLowerCase() === u);
