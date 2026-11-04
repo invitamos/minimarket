@@ -242,6 +242,9 @@ function load() {
     db.config.demo = true;
     save();
   }
+  migrar();
+}
+function migrar() {
   if (db.version < 2) {
     db.cajas.forEach((c) => (c.tipo = c.tipo || 'efectivo'));
     db.gastos.forEach((g) => { if (!g.medio) g.medio = g.deCaja || db.config.demo ? 'efectivo' : 'externo'; });
@@ -263,9 +266,223 @@ function load() {
     save();
   }
 }
+function guardarLocal() {
+  try { localStorage.setItem(DB_KEY, JSON.stringify(db)); return true; }
+  catch (e) { toast('No se pudo guardar. El almacenamiento del navegador está lleno.', 'err'); return false; }
+}
 function save() {
-  try { localStorage.setItem(DB_KEY, JSON.stringify(db)); if (typeof renderNoti === 'function') renderNoti(); }
-  catch (e) { toast('No se pudo guardar. El almacenamiento del navegador está lleno: descargue un respaldo y limpie ventas antiguas.', 'err'); }
+  guardarLocal();
+  if (typeof renderNoti === 'function') renderNoti();
+  syncMarcar();
+}
+
+/* =========================================================
+   SINCRONIZACIÓN: mismos usuarios, productos y ventas en todos los equipos.
+   Si el sistema se abre desde el hosting (https://...), usa api.php del mismo lugar.
+   Si se abre como archivo, usa la dirección cargada en "Conectar con servidor".
+   Sin internet sigue funcionando y sube los cambios cuando vuelve la conexión.
+   ========================================================= */
+const SK = { url: 'bnz_api', tok: 'bnz_tok', ver: 'bnz_ver', base: 'bnz_base', pend: 'bnz_pend' };
+const COLS = ['usuarios', 'sectores', 'productos', 'clientes', 'movimientos', 'ventas', 'gastos', 'cajas', 'consumos'];
+// Servidor donde está api.php (hosting con PHP). Todos los equipos se conectan solos a esta dirección.
+const SERVIDOR = 'https://spynetpy.com/minimarket-api/api.php';
+const urlGuardada = localStorage.getItem(SK.url);
+const SYNC = {
+  url: urlGuardada === 'ninguno' ? '' : urlGuardada || SERVIDOR,
+  token: localStorage.getItem(SK.tok) || '',
+  version: +localStorage.getItem(SK.ver) || 0,
+  pend: localStorage.getItem(SK.pend) === '1',
+  sucio: 0, ocupado: false, estado: 'local', timer: null, lazo: null,
+};
+const clonar = (x) => JSON.parse(JSON.stringify(x));
+function syncBase() { try { return JSON.parse(localStorage.getItem(SK.base) || 'null'); } catch { return null; } }
+function syncGuardarEstado() {
+  localStorage.setItem(SK.ver, String(SYNC.version));
+  localStorage.setItem(SK.pend, SYNC.pend ? '1' : '0');
+  if (SYNC.token) localStorage.setItem(SK.tok, SYNC.token); else localStorage.removeItem(SK.tok);
+}
+function syncFijarBase() { try { localStorage.setItem(SK.base, JSON.stringify(db)); } catch { /* sin espacio: se hará la mezcla sin base */ } }
+
+async function api(action, body = {}, url = SYNC.url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action, ...body }), cache: 'no-store', signal: ctl.signal });
+    const txt = await r.text();
+    try { return JSON.parse(txt); } catch { throw new Error('El servidor no respondió bien. Revise que api.php esté subido y que el hosting tenga PHP.'); }
+  } finally { clearTimeout(t); }
+}
+
+function syncEstado(e) {
+  SYNC.estado = e;
+  const el = $('#syncPill'); if (!el) return;
+  if (!SYNC.token) { el.innerHTML = ''; return; }
+  const T = { ok: ['ok', 'check', 'Sincronizado'], guardando: ['wait', 'clock', 'Guardando…'], offline: ['off', 'alert', 'Sin internet'], auth: ['off', 'lock', 'Vuelva a ingresar'] };
+  const [cls, i, n] = T[e] || T.ok;
+  el.innerHTML = `<span class="pill sync-${cls}" title="${e === 'offline' ? 'Los cambios quedan guardados en este equipo y se suben solos cuando vuelva internet.' : 'Los datos son los mismos en todos los equipos.'}">${ic(i)}${n}</span>`;
+}
+
+function syncMarcar() {
+  if (!SYNC.token) return;
+  SYNC.pend = true; SYNC.sucio++;
+  syncGuardarEstado();
+  clearTimeout(SYNC.timer);
+  SYNC.timer = setTimeout(syncSubir, 700);
+}
+
+function camposDistintos(a, b) { const out = {}; Object.keys(b).forEach((k) => { if (JSON.stringify(a?.[k]) !== JSON.stringify(b[k])) out[k] = b[k]; }); return out; }
+
+// Mezcla de 3 vías: lo que cambió en este equipo se aplica sobre lo último del servidor
+function mezclar(base, local, server) {
+  const out = clonar(server);
+  COLS.forEach((col) => {
+    out[col] = out[col] || [];
+    const B = new Map((base?.[col] || []).map((x) => [x.id, x]));
+    const L = new Map((local[col] || []).map((x) => [x.id, x]));
+    const idx = new Map(out[col].map((x, i) => [x.id, i]));
+    L.forEach((rec, id) => {
+      const b = B.get(id);
+      if (!b) { if (!idx.has(id)) { out[col].push(clonar(rec)); idx.set(id, out[col].length - 1); } return; }
+      if (JSON.stringify(b) === JSON.stringify(rec)) return;
+      if (!idx.has(id)) return; // lo borraron en otro equipo
+      const sv = out[col][idx.get(id)];
+      const cambios = camposDistintos(b, rec);
+      if (col === 'productos' && 'stock' in cambios) { cambios.stock = Math.round(((sv.stock || 0) + (rec.stock - b.stock)) * 1000) / 1000; }
+      out[col][idx.get(id)] = { ...sv, ...clonar(cambios) };
+    });
+    if (base) B.forEach((_, id) => { if (!L.has(id) && idx.has(id)) out[col] = out[col].filter((x) => x.id !== id); });
+  });
+  const cl = camposDistintos(base?.config || {}, local.config || {});
+  out.config = { ...server.config, ...cl };
+  out.config.nroVenta = Math.max(local.config?.nroVenta || 0, server.config?.nroVenta || 0);
+  out.config.nroFactura = Math.max(local.config?.nroFactura || 0, server.config?.nroFactura || 0);
+  // Tickets nuevos de este equipo que chocan con números del servidor: se renumeran
+  const usados = new Set((server.ventas || []).map((v) => v.nro));
+  const nuevos = new Set((local.ventas || []).filter((v) => !(base?.ventas || []).some((b) => b.id === v.id)).map((v) => v.id));
+  out.ventas.forEach((v) => { if (nuevos.has(v.id) && usados.has(v.nro)) { out.config.nroVenta++; v.nro = out.config.nroVenta; } });
+  ['version'].forEach((k) => (out[k] = Math.max(local[k] || 0, server[k] || 0)));
+  return out;
+}
+
+function adoptar(data, version) {
+  db = data;
+  SYNC.version = version;
+  SYNC.pend = false;
+  guardarLocal(); syncFijarBase(); syncGuardarEstado();
+  migrar();
+}
+
+function refrescarTrasSync() {
+  if (S.user) {
+    const u = db.usuarios.find((x) => x.id === S.user.id);
+    if (!u || !u.activo) { toast('Su usuario fue desactivado o eliminado desde otro equipo.', 'warn'); S.user = null; S.cart = []; sessionStorage.removeItem(SES_KEY); render(); return; }
+    S.user = u;
+  }
+  if (!$('.shell')) { if (!S.user) renderLogin(); return; }
+  renderNav(); renderTopPill(); renderYo(); renderNoti();
+  const tecleando = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+  if (!tecleando) renderView();
+}
+
+async function syncSubir() {
+  if (!SYNC.token || !SYNC.url) return;
+  if (SYNC.ocupado) { clearTimeout(SYNC.timer); SYNC.timer = setTimeout(syncSubir, 800); return; }
+  SYNC.ocupado = true; syncEstado('guardando');
+  const marca = SYNC.sucio;
+  try {
+    let r = await api('push', { token: SYNC.token, base: SYNC.version, data: db });
+    for (let intento = 0; r.conflict && intento < 4; intento++) {
+      const mezcla = mezclar(syncBase(), db, r.data);
+      db = mezcla; guardarLocal();
+      const v = r.version;
+      r = await api('push', { token: SYNC.token, base: v, data: db });
+      if (r.ok) setTimeout(refrescarTrasSync, 0);
+    }
+    if (r.auth) { SYNC.token = ''; syncGuardarEstado(); syncEstado('auth'); toast('La sesión con el servidor venció. Salga y vuelva a ingresar para seguir sincronizando.', 'warn'); return; }
+    if (!r.ok) throw new Error(r.error || 'No se pudo guardar en el servidor');
+    SYNC.version = r.version; syncFijarBase();
+    if (SYNC.sucio === marca) SYNC.pend = false;
+    syncGuardarEstado(); syncEstado('ok');
+  } catch (e) {
+    syncEstado('offline');
+    clearTimeout(SYNC.timer); SYNC.timer = setTimeout(syncSubir, 10000);
+  } finally {
+    SYNC.ocupado = false;
+    if (SYNC.pend && SYNC.sucio !== marca) { clearTimeout(SYNC.timer); SYNC.timer = setTimeout(syncSubir, 300); }
+  }
+}
+
+async function syncBajar() {
+  if (!SYNC.token || !SYNC.url || SYNC.ocupado) return;
+  if (SYNC.pend) return syncSubir();
+  if ($('#modal-root .modal-wrap')) return; // no cambiar datos mientras hay una ventana abierta
+  SYNC.ocupado = true;
+  try {
+    const r = await api('pull', { token: SYNC.token, version: SYNC.version });
+    if (r.auth) { SYNC.token = ''; syncGuardarEstado(); S.user = null; S.cart = []; sessionStorage.removeItem(SES_KEY); render(); toast('Vuelva a ingresar con su usuario.', 'warn', 'Sesión vencida'); return; }
+    if (r.ok && !r.same && !SYNC.pend) { adoptar(r.data, r.version); refrescarTrasSync(); }
+    syncEstado('ok');
+  } catch { syncEstado('offline'); }
+  finally { SYNC.ocupado = false; }
+}
+
+function syncIniciar() {
+  syncEstado(SYNC.pend ? 'guardando' : 'ok');
+  clearInterval(SYNC.lazo);
+  SYNC.lazo = setInterval(syncBajar, 12000);
+  if (SYNC.pend) syncSubir(); else syncBajar();
+}
+window.addEventListener('online', () => { if (SYNC.token) { SYNC.pend ? syncSubir() : syncBajar(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && SYNC.token) syncBajar(); });
+
+// Ingreso contra el servidor. Devuelve: 'ok' | 'mal' | 'inactivo' | 'local' (sin servidor o sin internet)
+async function loginServidor(usuario, hash) {
+  if (!SYNC.url) return 'local';
+  let r;
+  try { r = await api('login', { usuario, hash }); } catch { return 'local'; }
+  if (r.ok) {
+    SYNC.token = r.token;
+    if (SYNC.pend && syncBase()) { adoptar(mezclar(syncBase(), db, r.data), r.version); SYNC.pend = true; syncGuardarEstado(); }
+    else adoptar(r.data, r.version);
+    return 'ok';
+  }
+  if (r.inactivo) return 'inactivo';
+  if (r.empty) {
+    // Servidor nuevo y vacío: se suben los datos de este equipo
+    const loc = db.usuarios.find((x) => x.usuario.toLowerCase() === usuario);
+    if (!loc || loc.pass !== hash) return 'mal';
+    try {
+      const i = await api('init', { usuario, hash, data: db });
+      if (i.ok) { SYNC.token = i.token; adoptar(db, i.version); toast('Los datos de este equipo se subieron al servidor. Ahora todos los equipos ven lo mismo.', 'ok', 'Servidor listo'); return 'ok'; }
+    } catch { return 'local'; }
+  }
+  return 'mal';
+}
+
+function conectarServidor() {
+  modal({
+    title: 'Conectar con el servidor',
+    body: `<p class="muted" style="margin-bottom:14px">Escriba la dirección donde subió el sistema. Así este equipo usa los mismos usuarios, productos y ventas que los demás.</p>
+      <div class="field"><label>Dirección del sistema en internet</label><input class="input" id="svU" placeholder="https://spynetpy.com/minimarket-api/" value="${esc((SYNC.url || '').replace(/api\.php$/, ''))}" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus></div>
+      <p class="muted" id="svM" style="font-size:13.5px"></p>`,
+    actions: [
+      { label: 'Cancelar', cls: 'btn-red' },
+      { label: 'Probar y guardar', cls: 'btn-primary', icon: 'check', primary: true, onClick: async (w) => {
+        let u = $('#svU', w).value.trim();
+        if (!u) { toast('Escriba la dirección.', 'err'); return false; }
+        if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+        if (!/api\.php$/i.test(u)) u = u.replace(/\/?(index\.html)?$/i, '/') + 'api.php';
+        $('#svM', w).textContent = 'Probando conexión…';
+        try {
+          const r = await api('ping', {}, u);
+          if (!r.ok) throw new Error(r.error || 'Respuesta inválida');
+          localStorage.setItem(SK.url, u); SYNC.url = u;
+          toast(r.empty ? 'Conectado. El servidor está vacío: al ingresar se suben los datos de este equipo.' : 'Conectado al servidor. Ingrese con su usuario.', 'ok', 'Servidor');
+          if (!S.user) renderLogin();
+        } catch (e) { $('#svM', w).textContent = 'No se pudo conectar: ' + (e.message === 'Failed to fetch' ? 'revise la dirección y que haya internet.' : e.message); return false; }
+      } },
+    ],
+  });
 }
 
 /* ---------- Ayudantes de negocio ---------- */
@@ -499,19 +716,28 @@ function renderLogin() {
       ${pwField('lp', 'Contraseña', 'input-lg')}
       <div class="login-error" id="lErr"></div>
       <button class="btn btn-primary btn-lg btn-block" type="submit">${ic('lock')}Ingresar</button>
+      <button type="button" class="login-srv" id="svLink">${ic('arrows')}${SYNC.url ? 'Conectado al servidor · cambiar' : 'Conectar con servidor'}</button>
     </form>
   </div>`;
   $('#lu').focus();
-  $('#fLogin').onsubmit = (e) => {
+  $('#svLink').onclick = conectarServidor;
+  $('#fLogin').onsubmit = async (e) => {
     e.preventDefault();
     const u = $('#lu').value.trim().toLowerCase();
     const p = $('#lp').value.replace(/^\s+|\s+$/g, '');
-    const user = db.usuarios.find((x) => x.usuario.toLowerCase() === u);
-    if (!user || user.pass !== passHash(u, p)) {
-      $('#lErr').innerHTML = 'Usuario o contraseña incorrectos.<br><small>Cada computadora o celular guarda sus propios datos: si cambió la contraseña en otro equipo, acá sigue la anterior.</small>';
-      $('#lp').select(); return;
+    const hash = passHash(u, p);
+    const btn = $('#fLogin button[type=submit]'); btn.disabled = true; btn.innerHTML = `${ic('clock')}Ingresando…`;
+    const res = await loginServidor(u, hash);
+    btn.disabled = false; btn.innerHTML = `${ic('lock')}Ingresar`;
+    if (res === 'inactivo') { $('#lErr').textContent = 'Este usuario está desactivado. Consulte al administrador.'; return; }
+    if (res === 'mal') { $('#lErr').textContent = 'Usuario o contraseña incorrectos.'; $('#lp').select(); return; }
+    if (res !== 'ok') {
+      $('#lErr').innerHTML = 'No se pudo conectar con el servidor.<br><small>Revise que haya internet y vuelva a intentar. Los datos se guardan solo en el servidor, para que sean los mismos en todos los equipos.</small>';
+      return;
     }
-    if (!user.activo) { $('#lErr').textContent = 'Este usuario está desactivado. Consulte al administrador.'; return; }
+    const user = db.usuarios.find((x) => x.usuario.toLowerCase() === u);
+    if (!user || !user.activo) { $('#lErr').textContent = 'Usuario o contraseña incorrectos.'; return; }
+    syncIniciar();
     S.user = user;
     sessionStorage.setItem(SES_KEY, user.id);
     S.view = primeraVista();
@@ -532,6 +758,9 @@ async function salir() {
   if (!ok) return;
   S.user = null; S.cart = [];
   sessionStorage.removeItem(SES_KEY);
+  clearInterval(SYNC.lazo);
+  if (SYNC.pend) await syncSubir();
+  SYNC.token = ''; syncGuardarEstado();
   render();
 }
 
@@ -551,7 +780,7 @@ function render() {
           <button class="icon-btn menu-btn" id="btnMenu" aria-label="Menú">${ic('menu')}</button>
           <div class="title" id="topTitle"></div>
           <div class="spacer"></div>
-          <span id="cajaPill" class="pills hide-sm"></span>
+          <span id="syncPill" class="hide-sm"></span><span id="cajaPill" class="pills hide-sm"></span>
           <div class="noti-wrap"><button class="icon-btn noti-btn" id="btnNoti" aria-label="Avisos de stock" title="Avisos de stock">${ic('bell')}<span class="noti-count hidden" id="notiN"></span></button><div class="noti-panel hidden" id="notiPanel"></div></div>
           <span class="pill hide-sm" id="reloj">${ic('clock')}<span></span></span>
           <button class="who" id="btnYo" title="Mi perfil"></button>
@@ -570,6 +799,7 @@ function render() {
   renderTopPill();
   renderYo();
   renderNoti();
+  syncEstado(SYNC.estado);
   renderView();
 }
 
@@ -2285,6 +2515,15 @@ VIEWS.config = (el) => {
         <button class="btn btn-primary" id="fGuardar">${ic('check')}Guardar facturación</button>
       </div>
       <div class="panel">
+        <div class="panel-head">${ic('arrows')}<h3>Todos los equipos con los mismos datos</h3></div>
+        ${SYNC.token ? `<p style="margin-bottom:12px"><span class="badge green">Conectado</span> Este equipo está sincronizado con el servidor. Usuarios, productos y ventas son los mismos en la compu y en el celular.</p>`
+          : `<p class="muted" style="margin-bottom:12px">Este equipo trabaja solo con sus datos. Para compartirlos, suba el sistema a su hosting y conecte este equipo.</p>`}
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn" id="svCfg">${ic('arrows')}${SYNC.url ? 'Cambiar servidor' : 'Conectar con servidor'}</button>
+          ${SYNC.url && S.user.rol === 'admin' ? `<button class="btn btn-orange" id="svSubir">${ic('upload')}Subir los datos de este equipo</button>` : ''}
+        </div>
+      </div>
+      <div class="panel">
         <div class="panel-head"><h3>Limpiar datos</h3></div>
         ${c.demo ? '<p style="margin-bottom:10px">El sistema tiene <b>ventas, gastos y clientes de ejemplo</b> para que pueda probar las estadísticas.</p>' : ''}
         <p class="muted" style="margin-bottom:12px">Borra ventas, gastos, créditos, clientes, consumo interno y cierres de caja. Se conservan productos, categorías y usuarios.</p>
@@ -2298,6 +2537,27 @@ VIEWS.config = (el) => {
     Object.assign(c, { nombreMarket: nm, nombreBodega: nb, direccion: $('#cdir').value.trim(), telefono: $('#ctel').value.trim(), ruc: $('#cruc').value.trim(), mensajeTicket: $('#cmsg').value.trim(), ciudad: $('#cciu').value.trim(), leyendaTicket: $('#cley').value.trim(), firma: $('#cfir').value.trim() });
     save(); toast('Datos guardados');
   };
+  $('#svCfg').onclick = conectarServidor;
+  $('#svSubir') && ($('#svSubir').onclick = () => modal({
+    title: 'Subir los datos de este equipo', size: 'sm',
+    body: `<p style="margin-bottom:12px">Los productos, usuarios y ventas de <b>este equipo</b> reemplazan a los del servidor. Úselo una sola vez, desde la compu que tiene los datos buenos.</p>
+      <p class="muted" style="margin-bottom:12px;font-size:13.5px">Confirme con un administrador <b>del servidor</b> (si el servidor es nuevo, use el de este equipo).</p>
+      <div class="field"><label>Usuario administrador</label><input class="input" id="suU" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(S.user.usuario)}"></div>
+      ${pwField('suP', 'Contraseña')}`,
+    actions: [
+      { label: 'Cancelar', cls: 'btn-red' },
+      { label: 'Subir y reemplazar', cls: 'btn-orange', icon: 'upload', primary: true, onClick: async (w) => {
+        const us = $('#suU', w).value.trim().toLowerCase(), hash = passHash(us, $('#suP', w).value.trim());
+        try {
+          const ping = await api('ping');
+          const r = await api(ping.empty ? 'init' : 'replace', { usuario: us, hash, usuarioLocal: S.user.usuario, data: db });
+          if (!r.ok) { toast(r.error || 'Usuario o contraseña incorrectos.', 'err'); return false; }
+          SYNC.token = r.token; adoptar(db, r.version); syncIniciar(); renderView();
+          toast('Listo: ahora todos los equipos usan estos datos.', 'ok', 'Datos subidos');
+        } catch (e) { toast('No se pudo conectar con el servidor. Revise internet y la dirección.', 'err'); return false; }
+      } },
+    ],
+  }));
   $('#fGuardar').onclick = () => {
     const p3 = (x) => (x.replace(/\D/g, '') || '1').padStart(3, '0').slice(-3);
     Object.assign(c, { razonSocial: $('#frs').value.trim(), actividad: $('#fact').value.trim(), timbrado: $('#ftim').value.trim(), timbradoDesde: $('#ftd').value, timbradoHasta: $('#fth').value,
@@ -2338,7 +2598,8 @@ window.addEventListener('beforeunload', (e) => { if (S.cart.length) { e.preventD
 load();
 (() => {
   const id = sessionStorage.getItem(SES_KEY);
-  const u = id && db.usuarios.find((x) => x.id === id && x.activo);
+  const u = id && SYNC.token && db.usuarios.find((x) => x.id === id && x.activo);
   if (u) { S.user = u; S.view = primeraVista(); }
   render();
+  if (u && SYNC.token) syncIniciar();
 })();
