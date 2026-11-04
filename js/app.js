@@ -474,7 +474,7 @@ function cerrarModalSuperior() {
 }
 
 /* ---------- Login ---------- */
-const pwField = (id, label, extra = '') => `<div class="field"><label for="${id}">${label}</label><div class="pw"><input class="input ${extra}" id="${id}" type="password" autocomplete="off"><button type="button" class="pw-eye" data-eye="${id}" aria-label="Mostrar contraseña" title="Mostrar contraseña">${ic('eyeOff')}</button></div></div>`;
+const pwField = (id, label, extra = '') => `<div class="field"><label for="${id}">${label}</label><div class="pw"><input class="input ${extra}" id="${id}" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"><button type="button" class="pw-eye" data-eye="${id}" aria-label="Mostrar contraseña" title="Mostrar contraseña">${ic('eyeOff')}</button></div></div>`;
 
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-eye]'); if (!b) return;
@@ -495,7 +495,7 @@ function renderLogin() {
       <img class="login-logo" src="img/logo.png" alt="Logo Minimarket Bodega Bonanza">
       <h2>Ingresar a la caja</h2>
       <p class="muted">${esc(db.config.nombreMarket)} y ${esc(db.config.nombreBodega)}</p>
-      <div class="field"><label for="lu">Usuario</label><input class="input input-lg" id="lu" autocomplete="username" required></div>
+      <div class="field"><label for="lu">Usuario</label><input class="input input-lg" id="lu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>
       ${pwField('lp', 'Contraseña', 'input-lg')}
       <div class="login-error" id="lErr"></div>
       <button class="btn btn-primary btn-lg btn-block" type="submit">${ic('lock')}Ingresar</button>
@@ -505,9 +505,12 @@ function renderLogin() {
   $('#fLogin').onsubmit = (e) => {
     e.preventDefault();
     const u = $('#lu').value.trim().toLowerCase();
-    const p = $('#lp').value;
+    const p = $('#lp').value.replace(/^\s+|\s+$/g, '');
     const user = db.usuarios.find((x) => x.usuario.toLowerCase() === u);
-    if (!user || user.pass !== passHash(u, p)) { $('#lErr').textContent = 'Usuario o contraseña incorrectos.'; $('#lp').select(); return; }
+    if (!user || user.pass !== passHash(u, p)) {
+      $('#lErr').innerHTML = 'Usuario o contraseña incorrectos.<br><small>Cada computadora o celular guarda sus propios datos: si cambió la contraseña en otro equipo, acá sigue la anterior.</small>';
+      $('#lp').select(); return;
+    }
     if (!user.activo) { $('#lErr').textContent = 'Este usuario está desactivado. Consulte al administrador.'; return; }
     S.user = user;
     sessionStorage.setItem(SES_KEY, user.id);
