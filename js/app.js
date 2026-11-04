@@ -285,11 +285,12 @@ function save() {
 const SK = { url: 'bnz_api', tok: 'bnz_tok', ver: 'bnz_ver', base: 'bnz_base', pend: 'bnz_pend' };
 const COLS = ['usuarios', 'sectores', 'productos', 'clientes', 'movimientos', 'ventas', 'gastos', 'cajas', 'consumos'];
 // Servidor donde está api.php (hosting con PHP). Todos los equipos se conectan solos a esta dirección.
-const SERVIDORES = ['https://spynetpy.com/minimarket-api/api.php', 'https://www.spynetpy.com/minimarket-api/api.php'];
+// El dominio principal apunta a GitHub Pages (no ejecuta PHP); por eso los datos van en un subdominio del cPanel.
+const SERVIDORES = ['https://api-minimarket.spynetpy.com/api.php', 'https://api-minimarket.spynetpy.com/minimarket-api/api.php'];
 const SERVIDOR = SERVIDORES[0];
 const urlGuardada = localStorage.getItem(SK.url);
 const SYNC = {
-  url: urlGuardada && urlGuardada !== 'ninguno' ? urlGuardada : SERVIDOR,
+  url: urlGuardada && SERVIDORES.includes(urlGuardada) ? urlGuardada : SERVIDOR,
   token: localStorage.getItem(SK.tok) || '',
   version: +localStorage.getItem(SK.ver) || 0,
   pend: localStorage.getItem(SK.pend) === '1',
@@ -471,7 +472,7 @@ function conectarServidor() {
   modal({
     title: 'Conectar con el servidor',
     body: `<p class="muted" style="margin-bottom:14px">Escriba la dirección donde subió el sistema. Así este equipo usa los mismos usuarios, productos y ventas que los demás.</p>
-      <div class="field"><label>Dirección del sistema en internet</label><input class="input" id="svU" placeholder="https://spynetpy.com/minimarket-api/" value="${esc((SYNC.url || '').replace(/api\.php$/, ''))}" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus></div>
+      <div class="field"><label>Dirección del sistema en internet</label><input class="input" id="svU" placeholder="https://api-minimarket.spynetpy.com/" value="${esc((SYNC.url || '').replace(/api\.php$/, ''))}" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus></div>
       <p class="muted" id="svM" style="font-size:13.5px"></p>`,
     actions: [
       { label: 'Cancelar', cls: 'btn-red' },
