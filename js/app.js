@@ -719,7 +719,7 @@ function renderLogin() {
     <div class="login-bg" aria-hidden="true"></div>
     <form class="login-card" id="fLogin" autocomplete="off">
       <img class="login-logo" src="img/logo.png" alt="Logo Minimarket Bodega Bonanza">
-      <h2>Ingresar a la caja</h2>
+      <h2>Ingresar al sistema</h2>
       <p class="muted">${esc(db.config.nombreMarket)} y ${esc(db.config.nombreBodega)}</p>
       <div class="field"><label for="lu">Usuario</label><input class="input input-lg" id="lu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>
       ${pwField('lp', 'Contraseña', 'input-lg')}
