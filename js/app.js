@@ -21,6 +21,7 @@ const PERMISOS = [
   { k: 'consumo', n: 'Consumo interno' },
   { k: 'formas', n: 'Formas de pago' },
   { k: 'estadisticas', n: 'Estadísticas y ganancias' },
+  { k: 'informes', n: 'Informes por fechas' },
   { k: 'usuarios', n: 'Usuarios y permisos' },
   { k: 'config', n: 'Configuración y respaldo' },
 ];
@@ -38,6 +39,7 @@ const NAV = [
   { k: 'consumo', n: 'Consumo interno', i: 'package' },
   { k: 'formas', n: 'Formas de pago', i: 'card' },
   { k: 'estadisticas', n: 'Estadísticas', i: 'chart' },
+  { k: 'informes', n: 'Informes', i: 'file' },
   { k: 'usuarios', n: 'Usuarios', i: 'shield' },
   { k: 'config', n: 'Configuración', i: 'settings' },
 ];
@@ -173,7 +175,7 @@ function defaultDB() {
   ];
   const ahora = new Date().toISOString();
   return {
-    version: 4,
+    version: 5,
     config: {
       nombreMarket: 'Minimarket Bonanza', nombreBodega: 'Bodega Barley',
       direccion: '', telefono: '', ruc: '', mensajeTicket: '¡Gracias por tu compra!',
@@ -185,7 +187,7 @@ function defaultDB() {
       { id: 'u-caja', nombre: 'Cajero', usuario: 'caja', pass: passHash('caja', '1234'), rol: 'usuario', permisos: ['inicio', 'ventas', 'historial', 'clientes', 'caja'], activo: true, creado: ahora },
     ],
     sectores, productos,
-    clientes: [], movimientos: [], ventas: [], gastos: [], cajas: [], consumos: [],
+    clientes: [], movimientos: [], ventas: [], gastos: [], cajas: [], consumos: [], ingresos: [],
   };
 }
 
@@ -265,6 +267,12 @@ function migrar() {
     db.version = 4;
     save();
   }
+  if (db.version < 5) {
+    db.ingresos = db.ingresos || [];
+    db.version = 5;
+    save();
+  }
+  db.ingresos = db.ingresos || [];
 }
 function guardarLocal() {
   try { localStorage.setItem(DB_KEY, JSON.stringify(db)); return true; }
@@ -283,7 +291,7 @@ function save() {
    Sin internet sigue funcionando y sube los cambios cuando vuelve la conexión.
    ========================================================= */
 const SK = { url: 'bnz_api', tok: 'bnz_tok', ver: 'bnz_ver', base: 'bnz_base', pend: 'bnz_pend' };
-const COLS = ['usuarios', 'sectores', 'productos', 'clientes', 'movimientos', 'ventas', 'gastos', 'cajas', 'consumos'];
+const COLS = ['usuarios', 'sectores', 'productos', 'clientes', 'movimientos', 'ventas', 'gastos', 'cajas', 'consumos', 'ingresos'];
 // Servidor donde está api.php (hosting con PHP). Todos los equipos se conectan solos a esta dirección.
 // El dominio principal apunta a GitHub Pages (no ejecuta PHP); por eso los datos van en un subdominio del cPanel.
 const SERVIDORES = ['https://api-minimarket.spynetpy.com/api.php', 'https://api-minimarket.spynetpy.com/minimarket-api/api.php'];
@@ -719,7 +727,7 @@ function renderLogin() {
     <div class="login-bg" aria-hidden="true"></div>
     <form class="login-card" id="fLogin" autocomplete="off">
       <img class="login-logo" src="img/logo.png" alt="Logo Minimarket Bodega Bonanza">
-      <h2>Ingresar al sistema</h2>
+      <h2>Ingresar a la caja</h2>
       <p class="muted">${esc(db.config.nombreMarket)} y ${esc(db.config.nombreBodega)}</p>
       <div class="field"><label for="lu">Usuario</label><input class="input input-lg" id="lu" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>
       ${pwField('lp', 'Contraseña', 'input-lg')}
@@ -971,7 +979,7 @@ VIEWS.inicio = (el) => {
       { k: 'clientes', act: 'cliente', i: 'user', n: 'Nuevo cliente', d: 'Para vender a crédito' },
       { k: 'clientes', go: 'clientes', i: 'users', n: 'Clientes que deben', d: deudores ? `${deudores} con deuda pendiente` : 'Nadie debe por ahora' },
       { k: 'resumen', go: 'resumen', i: 'clipboard', n: 'Resumen del día', d: 'Lo vendido en cada negocio' },
-      { k: 'caja', act: 'informe', i: 'download', n: 'Informe de hoy en PDF', d: 'Recaudado, ventas y gastos del día' },
+      { k: 'informes', go: 'informes', i: 'file', n: 'Informes por fechas', d: 'Todo lo que pasó, en PDF o Excel' },
     ] },
   ];
   el.innerHTML = `
@@ -1012,7 +1020,29 @@ function consultarPrecio() {
   $('#cpQ', w).oninput = pintar; pintar();
 }
 
+function registrarIngreso(p, cant) {
+  const s = sectorDe(p.sectorId);
+  db.ingresos.push({ id: uid(), fecha: new Date().toISOString(), pid: p.id, nombre: p.nombre, sectorId: p.sectorId, sector: s?.nombre || '', unidad: s?.unidad || 'market', medida: p.medida, cant, costo: p.costo, usuario: S.user?.nombre || '', cajaId: algunaCaja()?.id || null });
+}
+
+// Ventas y compras solo con la caja abierta
+function conCaja(que, seguir) {
+  if (algunaCaja()) { seguir && seguir(); return true; }
+  modal({
+    title: 'La caja está cerrada', size: 'sm',
+    body: `<div class="confirm-icon danger">${ic('lock')}</div>
+      <p class="confirm-msg" style="text-align:center">No se pueden registrar <b>${que}</b> con la caja cerrada.<br>Primero abra la caja.</p>
+      ${puede('caja') ? '' : '<p class="muted" style="text-align:center;margin-top:8px">Pida a un encargado que abra la caja.</p>'}`,
+    actions: [
+      { label: puede('caja') ? 'Cancelar' : 'Entendido', cls: 'btn-red' },
+      ...(puede('caja') ? [{ label: 'Abrir caja', cls: 'btn-green', icon: 'unlock', primary: true, onClick: () => { abrirCaja('efectivo'); renderTopPill(); if (S.view === 'ventas') renderView(); if (seguir) setTimeout(seguir, 60); } }] : []),
+    ],
+  });
+  return false;
+}
+
 function cargarMercaderia() {
+  if (!algunaCaja()) return conCaja('compras de mercadería', cargarMercaderia);
   const grupos = db.sectores.map((s) => {
     const ps = db.productos.filter((p) => p.activo && p.controlStock && p.sectorId === s.id).sort((a, b) => a.nombre.localeCompare(b.nombre));
     return ps.length ? `<optgroup label="${esc(unidadCorta(s.unidad))} · ${esc(s.nombre)}">${ps.map((p) => `<option value="${p.id}">${esc(p.nombre)} (hay ${fmtCant(p.stock)} ${p.medida})</option>`).join('')}</optgroup>` : '';
@@ -1030,8 +1060,9 @@ function cargarMercaderia() {
         const p = prodDe($('#cmP', w).value); const n = parseCant($('#cmC', w).value);
         if (!p) { toast('Elija un producto.', 'err'); return false; }
         if (n <= 0) { toast('Escriba la cantidad que llegó.', 'err'); return false; }
-        p.stock = Math.round((p.stock + n) * 1000) / 1000;
         const co = parseMonto($('#cmCo', w).value); if (co > 0) p.costo = co;
+        p.stock = Math.round((p.stock + n) * 1000) / 1000;
+        registrarIngreso(p, n);
         save(); toast(`${p.nombre}: ahora hay ${fmtCant(p.stock)} ${p.medida}`);
         if (S.view === 'inicio') renderView();
       } },
@@ -1096,13 +1127,14 @@ function bindGo(el) { $$('[data-go]', el).forEach((b) => (b.onclick = () => ir(b
    ========================================================= */
 VIEWS.ventas = (el) => {
   const c = algunaCaja();
+  if (!c && !$('#modal-root .modal-wrap')) setTimeout(() => conCaja('ventas'), 120);
   const secMk = db.sectores.filter((s) => s.unidad === 'market');
   const secBd = db.sectores.filter((s) => s.unidad === 'bodega');
   const chip = (id, nombre, u) => `<button class="chip ${u ? 'u-' + u : ''} ${S.sector === id ? 'on' : ''}" data-sec="${id}">${esc(nombre)}</button>`;
   el.innerHTML = `
     <div class="pos">
       <div class="pos-left">
-        ${!c ? `<div class="caja-off">${ic('alert')}<span class="grow">La caja está cerrada. Ábrala para poder cobrar.</span>${puede('caja') ? `<button class="btn btn-orange btn-sm" id="abrirAqui">Abrir caja</button>` : ''}</div>` : ''}
+        ${!c ? `<div class="caja-off">${ic('alert')}<span class="grow">La caja está cerrada: no se pueden hacer ventas hasta abrirla.</span>${puede('caja') ? `<button class="btn btn-orange btn-sm" id="abrirAqui">Abrir caja</button>` : ''}</div>` : ''}
         <div class="pos-search">
           <div class="search">${ic('search')}<input class="input" id="posQ" placeholder="Buscar por nombre o código de barras (F3)" value="${esc(S.q)}" autocomplete="off"></div>
         </div>
@@ -1167,6 +1199,7 @@ function renderGrid() {
 
 function agregar(p) {
   if (!p) return;
+  if (!algunaCaja()) return conCaja('ventas', () => agregar(p));
   if (p.medida === 'kg') {
     modal({
       title: `Peso de ${esc(p.nombre)}`, size: 'sm',
@@ -1253,7 +1286,7 @@ function opcionesClientes(sel) {
 
 function cobrar() {
   if (!S.cart.length) return;
-  if (!algunaCaja()) { toast('Abra la caja antes de cobrar.', 'warn'); if (puede('caja')) abrirCaja('efectivo', () => renderView()); return; }
+  if (!algunaCaja()) return conCaja('ventas', cobrar);
   const t = totalesCarrito();
   let metodo = 'efectivo';
   const billetes = [t.total, Math.ceil(t.total / 10000) * 10000, Math.ceil(t.total / 50000) * 50000, Math.ceil(t.total / 100000) * 100000]
@@ -1810,6 +1843,8 @@ function ajustarStock(p) {
         const n = parseCant($('#cS', w).value);
         if (modo === 'sumar' && n <= 0) { toast('Ingrese una cantidad mayor a cero.', 'err'); return false; }
         if (modo === 'fijar' && n < 0) { toast('El stock no puede ser negativo.', 'err'); return false; }
+        if (modo === 'sumar' && !algunaCaja()) { setTimeout(() => conCaja('compras de mercadería'), 50); return; }
+        if (modo === 'sumar') registrarIngreso(p, n);
         p.stock = modo === 'sumar' ? Math.round((p.stock + n) * 1000) / 1000 : n;
         save(); tablaProd(); toast(`Stock actualizado: ${fmtCant(p.stock)} ${p.medida}`);
       } },
@@ -2065,6 +2100,7 @@ function tablaGas() {
 }
 
 function formGasto(g, done) {
+  if (!g && !algunaCaja()) return conCaja('gastos ni compras', () => formGasto(null, done));
   const nuevo = !g;
   g = g || { unidad: 'market', categoria: CAT_GASTO[0], descripcion: '', monto: 0, medio: 'efectivo', fecha: new Date().toISOString() };
   let unidad = g.unidad, medio = g.medio || 'externo';
@@ -2335,6 +2371,161 @@ function chartDias(desde, hasta, ventas) {
   </svg>`;
 }
 
+/* =========================================================
+   INFORMES: todo lo que pasó entre dos fechas (pantalla, PDF y Excel)
+   ========================================================= */
+S.inf = { rango: 'mes', desde: '', hasta: '' };
+function rangoInforme() {
+  const hoy = new Date(), r = S.inf.rango;
+  if (r === 'hoy') return [dkey(hoy), dkey(hoy)];
+  if (r === 'ayer') { const a = addDays(hoy, -1); return [dkey(a), dkey(a)]; }
+  if (r === '7') return [dkey(addDays(hoy, -6)), dkey(hoy)];
+  if (r === 'mes') return [dkey(new Date(hoy.getFullYear(), hoy.getMonth(), 1)), dkey(hoy)];
+  if (r === 'mesant') return [dkey(new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1)), dkey(new Date(hoy.getFullYear(), hoy.getMonth(), 0))];
+  if (r === 'anio') return [dkey(new Date(hoy.getFullYear(), 0, 1)), dkey(hoy)];
+  return [S.inf.desde || dkey(hoy), S.inf.hasta || dkey(hoy)];
+}
+
+function datosInforme(desde, hasta) {
+  const vs = ventasRango(desde, hasta);
+  const anuladas = db.ventas.filter((v) => v.anulada && enRango(v.fecha, desde, hasta));
+  const gastos = gastosRango(desde, hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
+  const consumos = consumosRango(desde, hasta);
+  const compras = (db.ingresos || []).filter((x) => enRango(x.fecha, desde, hasta)).sort((a, b) => a.fecha.localeCompare(b.fecha));
+  const r = resumen(vs, gastos, consumos);
+  const dias = {};
+  vs.forEach((v) => { const k = dkey(v.fecha); dias[k] = dias[k] || { k, n: 0, m: 0, b: 0 }; dias[k].n++; dias[k].m += v.totales.market; dias[k].b += v.totales.bodega; });
+  const metodos = Object.entries(METODOS).map(([k, n]) => { const x = vs.filter((v) => v.metodo === k); return { n, c: x.length, t: sumBy(x, (v) => v.total) }; });
+  const cats = {}, prods = {};
+  vs.forEach((v) => v.items.forEach((i) => {
+    cats[i.sectorId] = cats[i.sectorId] || { n: i.sector, u: i.unidad, t: 0, g: 0, c: 0 };
+    cats[i.sectorId].t += i.subtotal; cats[i.sectorId].g += i.subtotal - Math.round(i.cant * i.costo); cats[i.sectorId].c += i.cant;
+    prods[i.pid] = prods[i.pid] || { n: i.nombre, u: i.unidad, s: i.sector, med: i.medida, c: 0, t: 0, g: 0 };
+    prods[i.pid].c += i.cant; prods[i.pid].t += i.subtotal; prods[i.pid].g += i.subtotal - Math.round(i.cant * i.costo);
+  }));
+  const movs = db.movimientos.filter((m) => enRango(m.fecha, desde, hasta));
+  return {
+    desde, hasta, vs, anuladas, gastos, consumos, compras, r, rec: recaudado(desde, hasta),
+    dias: Object.values(dias).sort((a, b) => a.k.localeCompare(b.k)), metodos,
+    cats: Object.values(cats).sort((a, b) => b.t - a.t), prods: Object.values(prods).sort((a, b) => b.t - a.t),
+    fiado: sumBy(movs.filter((m) => m.tipo === 'cargo'), (m) => m.monto), cobrado: sumBy(movs.filter((m) => m.tipo === 'pago'), (m) => m.monto),
+    pendiente: sumBy(db.clientes, (c) => Math.max(0, saldo(c.id))),
+    totalCompras: sumBy(compras, (x) => Math.round(x.cant * x.costo)),
+    cierres: db.cajas.filter((c) => !c.abierta && c.cierre && enRango(c.cierre, desde, hasta)).sort((a, b) => a.cierre.localeCompare(b.cierre)),
+  };
+}
+
+const FILAS_NEGOCIO = [['Ventas', 'ventas'], ['Costo de lo vendido', 'costo'], ['Ganancia bruta', 'bruta'], ['Gastos', 'gastos'], ['Consumo interno (a costo)', 'consumo'], ['Ganancia neta', 'neta'], ['Tickets', 'tickets']];
+
+VIEWS.informes = (el) => {
+  const [desde, hasta] = rangoInforme();
+  const D = datosInforme(desde, hasta);
+  const rb = (k, n) => `<button class="chip ${S.inf.rango === k ? 'on' : ''}" data-ir="${k}">${n}</button>`;
+  const seccion = (titulo, cuerpo, extra = '') => `<div class="panel inf-sec"><div class="panel-head"><h3>${titulo}</h3>${extra}</div>${cuerpo}</div>`;
+  const vacio = (t) => `<p class="muted">${t}</p>`;
+  const tabla = (key, cab, filas, render, tam = 10) => {
+    if (!filas.length) return vacio('Sin movimientos en estas fechas.');
+    const pg = paginar(key, filas, renderView, tam);
+    return `<div class="table-wrap"><table><thead><tr>${cab.map((c) => `<th class="${c[1] || ''}">${c[0]}</th>`).join('')}</tr></thead><tbody>${pg.items.map(render).join('')}</tbody></table></div>${pg.html}`;
+  };
+  const cajaBox = (t, d) => `<div class="rec-box"><div class="rec-title">${ic(CAJAS[t].i)}${CAJAS[t].c}</div>
+    <div class="rec-row"><span>Ingreso</span><b class="num c-green">${gs(d.ing)}</b></div><div class="rec-row"><span>Egreso</span><b class="num c-red">${gs(d.egr)}</b></div><div class="rec-row"><span>Saldo</span><b class="num c-blue">${gs(d.ing - d.egr)}</b></div></div>`;
+  el.innerHTML = `
+    <div class="toolbar">
+      <div class="range">${rb('hoy', 'Hoy')}${rb('ayer', 'Ayer')}${rb('7', '7 días')}${rb('mes', 'Este mes')}${rb('mesant', 'Mes anterior')}${rb('anio', 'Este año')}${rb('custom', 'Elegir fechas')}</div>
+      <span class="grow"></span>
+      <span class="${S.inf.rango === 'custom' ? '' : 'hidden'}" style="display:flex;gap:8px;align-items:center"><span class="muted">Desde</span><input class="input" type="date" id="iD" value="${desde}"><span class="muted">hasta</span><input class="input" type="date" id="iH" value="${hasta}"></span>
+    </div>
+    <div class="inf-head-bar">
+      <div><h2>Informe del ${fFecha(desde + 'T12:00')}${desde !== hasta ? ' al ' + fFecha(hasta + 'T12:00') : ''}</h2><p class="muted">${esc(db.config.nombreMarket)} y ${esc(db.config.nombreBodega)}</p></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-primary" id="iPdf">${ic('download')}Descargar PDF</button><button class="btn btn-green" id="iCsv">${ic('file')}Descargar Excel</button></div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><span>Ventas</span><b class="num">${gs(D.r.total.ventas)}</b></div>
+      <div class="kpi"><span>Ganancia neta</span><b class="num" style="color:${D.r.total.neta < 0 ? 'var(--rojo)' : 'inherit'}">${gs(D.r.total.neta)}</b></div>
+      <div class="kpi"><span>Compras de mercadería</span><b class="num">${gs(D.totalCompras)}</b></div>
+      <div class="kpi"><span>Gastos</span><b class="num">${gs(D.r.total.gastos)}</b></div>
+    </div>
+    ${seccion('Resultado por negocio', `<div class="table-wrap"><table><thead><tr><th></th><th class="right">${esc(unidadNombre('market'))}</th><th class="right">${esc(unidadNombre('bodega'))}</th><th class="right">Total</th></tr></thead><tbody>
+      ${FILAS_NEGOCIO.map(([n, k]) => `<tr><td>${k === 'neta' ? `<b>${n}</b>` : n}</td><td class="right num">${k === 'tickets' ? D.r.market[k] : gs(D.r.market[k])}</td><td class="right num">${k === 'tickets' ? D.r.bodega[k] : gs(D.r.bodega[k])}</td><td class="right num"><b>${k === 'tickets' ? D.r.total[k] : gs(D.r.total[k])}</b></td></tr>`).join('')}</tbody></table></div>`)}
+    <div class="cols cols-2">
+      ${seccion('Dinero que entró y salió', `<div class="rec-grid">${cajaBox('efectivo', D.rec.efectivo)}${cajaBox('transferencia', D.rec.transferencia)}</div><div class="rec-total"><span>Total sobrante</span><b class="num">${gs(saldoRec(D.rec))}</b></div>`)}
+      ${seccion('Créditos', `<div class="rec-box"><div class="rec-row"><span>Se fió en estas fechas</span><b class="num c-orange">${gs(D.fiado)}</b></div><div class="rec-row"><span>Se cobró de créditos</span><b class="num c-green">${gs(D.cobrado)}</b></div><div class="rec-row"><span>Deuda pendiente hoy</span><b class="num c-red">${gs(D.pendiente)}</b></div></div>
+        <div class="rec-box" style="margin-top:12px"><div class="rec-row"><span>Ventas anuladas</span><b>${D.anuladas.length} · ${gs(sumBy(D.anuladas, (v) => v.total))}</b></div></div>`)}
+    </div>
+    ${seccion('Ventas por día', tabla('infDias', [['Fecha'], ['Tickets', 'right'], [esc(unidadCorta('market')), 'right'], [esc(unidadCorta('bodega')), 'right'], ['Total', 'right']], D.dias,
+      (d) => `<tr><td>${fFecha(d.k + 'T12:00')}</td><td class="right">${d.n}</td><td class="right num">${gs(d.m)}</td><td class="right num">${gs(d.b)}</td><td class="right num"><b>${gs(d.m + d.b)}</b></td></tr>`))}
+    <div class="cols cols-2">
+      ${seccion('Formas de pago', `<div class="table-wrap"><table><thead><tr><th>Forma</th><th class="right">Ventas</th><th class="right">Total</th></tr></thead><tbody>${D.metodos.map((m) => `<tr><td>${m.n}</td><td class="right">${m.c}</td><td class="right num">${gs(m.t)}</td></tr>`).join('')}</tbody></table></div>`)}
+      ${seccion('Ventas por categoría', tabla('infCat', [['Categoría'], ['Vendido', 'right'], ['Ganancia', 'right']], D.cats,
+        (c) => `<tr class="u-${c.u}"><td><span class="tag">${esc(c.n)}</span></td><td class="right num">${gs(c.t)}</td><td class="right num">${gs(c.g)}</td></tr>`))}
+    </div>
+    ${seccion('Productos vendidos', tabla('infProd', [['Producto'], ['Categoría'], ['Cantidad', 'right'], ['Vendido', 'right'], ['Ganancia', 'right']], D.prods,
+      (x) => `<tr class="u-${x.u}"><td><b>${esc(x.n)}</b></td><td><span class="tag">${esc(x.s)}</span></td><td class="right">${fmtCant(x.c)} ${x.med}</td><td class="right num">${gs(x.t)}</td><td class="right num">${gs(x.g)}</td></tr>`), `<span class="badge">${D.prods.length}</span>`)}
+    ${seccion('Compras de mercadería', tabla('infComp', [['Fecha'], ['Producto'], ['Cantidad', 'right'], ['Costo', 'right'], ['Total', 'right'], ['Registró']], D.compras.slice().reverse(),
+      (x) => `<tr class="u-${x.unidad}"><td>${fFH(x.fecha)}</td><td><b>${esc(x.nombre)}</b></td><td class="right">${fmtCant(x.cant)} ${x.medida}</td><td class="right num">${gs(x.costo)}</td><td class="right num"><b>${gs(x.cant * x.costo)}</b></td><td>${esc(x.usuario)}</td></tr>`), `<span class="badge">${gs(D.totalCompras)}</span>`)}
+    ${seccion('Gastos', tabla('infGas', [['Fecha'], ['Negocio'], ['Categoría'], ['Detalle'], ['Monto', 'right']], D.gastos.slice().reverse(),
+      (g) => `<tr class="u-${g.unidad}"><td>${fFecha(g.fecha)}</td><td><span class="tag">${unidadCorta(g.unidad)}</span></td><td>${esc(g.categoria)}</td><td>${esc(g.descripcion)}</td><td class="right num"><b>${gs(g.monto)}</b></td></tr>`), `<span class="badge">${gs(D.r.total.gastos)}</span>`)}
+    <div class="cols cols-2">
+      ${seccion('Consumo interno', tabla('infCon', [['Fecha'], ['Producto'], ['Cant.', 'right'], ['Valor', 'right']], D.consumos.slice().reverse(),
+        (c) => `<tr><td>${fFecha(c.fecha)}</td><td>${esc(c.nombre)}<br><small class="muted">${esc(c.motivo)}</small></td><td class="right">${fmtCant(c.cant)}</td><td class="right num">${gs(c.cant * c.costo)}</td></tr>`, 8))}
+      ${seccion('Cierres de caja', tabla('infCie', [['Caja'], ['Cierre'], ['Saldo', 'right']], D.cierres.slice().reverse(),
+        (x) => `<tr><td><b>${CAJAS[x.tipo || 'efectivo'].c}</b><br><small class="muted">${esc(x.cierraUsuario || '')}</small></td><td>${fFH(x.cierre)}</td><td class="right num"><b class="c-blue">${gs(saldoCierre(x))}</b></td></tr>`, 8))}
+    </div>`;
+  $$('[data-ir]', el).forEach((b) => (b.onclick = () => {
+    if (b.dataset.ir === 'custom') { const [d, h] = rangoInforme(); S.inf.desde = d; S.inf.hasta = h; }
+    S.inf.rango = b.dataset.ir; ['infDias', 'infCat', 'infProd', 'infComp', 'infGas', 'infCon', 'infCie'].forEach(pagReset); renderView();
+  }));
+  const cu = () => { S.inf.desde = $('#iD').value; S.inf.hasta = $('#iH').value; if (S.inf.desde && S.inf.hasta) { if (S.inf.desde > S.inf.hasta) [S.inf.desde, S.inf.hasta] = [S.inf.hasta, S.inf.desde]; renderView(); } };
+  $('#iD').onchange = cu; $('#iH').onchange = cu;
+  $('#iPdf').onclick = () => informePdf(D);
+  $('#iCsv').onclick = () => informeCsv(D);
+};
+
+function informePdf(D) {
+  const c = db.config;
+  const T = (cab, filas) => filas.length ? `<table class="inf"><thead><tr>${cab.map((x) => `<th class="${x[1] || ''}">${x[0]}</th>`).join('')}</tr></thead><tbody>${filas.join('')}</tbody></table>` : '<p>Sin movimientos.</p>';
+  const R = (...celdas) => `<tr>${celdas.map((x) => (Array.isArray(x) ? `<td class="r">${x[0]}</td>` : `<td>${x}</td>`)).join('')}</tr>`;
+  imprimir(`<div class="inf-head"><img src="img/logo.png" alt=""><div><h1>Informe general</h1><p>${esc(c.nombreMarket)} y ${esc(c.nombreBodega)}${c.ruc ? ' · RUC ' + esc(c.ruc) : ''}</p>
+      <p>Del <b>${fFecha(D.desde + 'T12:00')}</b> al <b>${fFecha(D.hasta + 'T12:00')}</b> · Generado por ${esc(S.user.nombre)} el ${fFH(new Date())}</p></div></div>
+    <h2>Resultado por negocio</h2>${T([[''], [esc(unidadNombre('market')), 'r'], [esc(unidadNombre('bodega')), 'r'], ['Total', 'r']], FILAS_NEGOCIO.map(([n, k]) => R(n, [k === 'tickets' ? D.r.market[k] : gs(D.r.market[k])], [k === 'tickets' ? D.r.bodega[k] : gs(D.r.bodega[k])], [k === 'tickets' ? D.r.total[k] : gs(D.r.total[k])])))}
+    <h2>Dinero</h2>${T([[''], ['Efectivo', 'r'], ['Transferencia', 'r']], [R('Ingreso', [gs(D.rec.efectivo.ing)], [gs(D.rec.transferencia.ing)]), R('Egreso', [gs(D.rec.efectivo.egr)], [gs(D.rec.transferencia.egr)]), R('<b>Saldo</b>', [gs(D.rec.efectivo.ing - D.rec.efectivo.egr)], [gs(D.rec.transferencia.ing - D.rec.transferencia.egr)])])}
+    <p><b>Total sobrante:</b> ${gs(saldoRec(D.rec))} · <b>Compras de mercadería:</b> ${gs(D.totalCompras)} · <b>Fiado:</b> ${gs(D.fiado)} · <b>Cobrado de créditos:</b> ${gs(D.cobrado)} · <b>Deuda pendiente:</b> ${gs(D.pendiente)} · <b>Anuladas:</b> ${D.anuladas.length}</p>
+    <h2>Ventas por día</h2>${T([['Fecha'], ['Tickets', 'r'], [esc(unidadCorta('market')), 'r'], [esc(unidadCorta('bodega')), 'r'], ['Total', 'r']], D.dias.map((d) => R(fFecha(d.k + 'T12:00'), [d.n], [gs(d.m)], [gs(d.b)], [gs(d.m + d.b)])))}
+    <h2>Formas de pago</h2>${T([['Forma'], ['Ventas', 'r'], ['Total', 'r']], D.metodos.map((m) => R(m.n, [m.c], [gs(m.t)])))}
+    <h2>Ventas por categoría</h2>${T([['Categoría'], ['Negocio'], ['Vendido', 'r'], ['Ganancia', 'r']], D.cats.map((x) => R(esc(x.n), unidadCorta(x.u), [gs(x.t)], [gs(x.g)])))}
+    <h2>Productos vendidos</h2>${T([['Producto'], ['Categoría'], ['Cantidad', 'r'], ['Vendido', 'r'], ['Ganancia', 'r']], D.prods.map((x) => R(esc(x.n), esc(x.s), [`${fmtCant(x.c)} ${x.med}`], [gs(x.t)], [gs(x.g)])))}
+    <h2>Compras de mercadería</h2>${T([['Fecha'], ['Producto'], ['Cantidad', 'r'], ['Total', 'r']], D.compras.map((x) => R(fFH(x.fecha), esc(x.nombre), [`${fmtCant(x.cant)} ${x.medida}`], [gs(x.cant * x.costo)])))}
+    <h2>Gastos</h2>${T([['Fecha'], ['Negocio'], ['Categoría'], ['Detalle'], ['Monto', 'r']], D.gastos.map((g) => R(fFecha(g.fecha), unidadCorta(g.unidad), esc(g.categoria), esc(g.descripcion), [gs(g.monto)])))}
+    <h2>Consumo interno</h2>${T([['Fecha'], ['Producto'], ['Motivo'], ['Cantidad', 'r'], ['Valor a costo', 'r']], D.consumos.map((x) => R(fFecha(x.fecha), esc(x.nombre), esc(x.motivo), [`${fmtCant(x.cant)} ${x.medida}`], [gs(x.cant * x.costo)])))}
+    <h2>Cierres de caja</h2>${T([['Caja'], ['Apertura'], ['Cierre'], ['Cerró'], ['Saldo', 'r']], D.cierres.map((x) => R(CAJAS[x.tipo || 'efectivo'].c, fFH(x.apertura), fFH(x.cierre), esc(x.cierraUsuario || ''), [gs(saldoCierre(x))])))}
+    <p class="inf-foot">Para guardar como PDF, elija “Guardar como PDF” en la ventana de impresión.</p>`, 'a4');
+}
+
+function informeCsv(D) {
+  const q = (v) => { const t = String(v ?? ''); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const L = [];
+  const fila = (...x) => L.push(x.map(q).join(';'));
+  const bloque = (titulo, cab, filas) => { L.push(''); fila(titulo); fila(...cab); filas.forEach((f) => fila(...f)); };
+  fila(`Informe ${db.config.nombreMarket} y ${db.config.nombreBodega}`); fila('Desde', fFecha(D.desde + 'T12:00'), 'Hasta', fFecha(D.hasta + 'T12:00'));
+  bloque('RESULTADO POR NEGOCIO', ['', unidadNombre('market'), unidadNombre('bodega'), 'Total'], FILAS_NEGOCIO.map(([n, k]) => [n, D.r.market[k], D.r.bodega[k], D.r.total[k]]));
+  bloque('DINERO', ['', 'Efectivo', 'Transferencia'], [['Ingreso', D.rec.efectivo.ing, D.rec.transferencia.ing], ['Egreso', D.rec.efectivo.egr, D.rec.transferencia.egr], ['Saldo', D.rec.efectivo.ing - D.rec.efectivo.egr, D.rec.transferencia.ing - D.rec.transferencia.egr]]);
+  bloque('CREDITOS', ['Fiado', 'Cobrado', 'Deuda pendiente'], [[D.fiado, D.cobrado, D.pendiente]]);
+  bloque('VENTAS', ['Nº', 'Fecha', 'Hora', 'Atendió', 'Cliente', 'Forma de pago', 'Banco', 'Comprobante', unidadCorta('market'), unidadCorta('bodega'), 'Total'],
+    D.vs.map((v) => [nroTicket(v), fFecha(v.fecha), fHora(v.fecha), v.usuario || '', nombreCliente(v), METODOS[v.metodo], v.banco || '', v.comprobante || '', v.totales.market, v.totales.bodega, v.total]));
+  bloque('DETALLE DE PRODUCTOS VENDIDOS', ['Nº venta', 'Fecha', 'Producto', 'Categoría', 'Negocio', 'Cantidad', 'Precio', 'Subtotal', 'Costo'],
+    D.vs.flatMap((v) => v.items.map((i) => [nroTicket(v), fFecha(v.fecha), i.nombre, i.sector, unidadCorta(i.unidad), String(i.cant).replace('.', ','), i.precio, i.subtotal, Math.round(i.cant * i.costo)])));
+  bloque('COMPRAS DE MERCADERIA', ['Fecha', 'Producto', 'Cantidad', 'Costo', 'Total', 'Registró'], D.compras.map((x) => [fFH(x.fecha), x.nombre, String(x.cant).replace('.', ','), x.costo, Math.round(x.cant * x.costo), x.usuario]));
+  bloque('GASTOS', ['Fecha', 'Negocio', 'Categoría', 'Detalle', 'Pagado con', 'Monto'], D.gastos.map((g) => [fFecha(g.fecha), unidadCorta(g.unidad), g.categoria, g.descripcion, g.medio || '', g.monto]));
+  bloque('CONSUMO INTERNO', ['Fecha', 'Producto', 'Motivo', 'Cantidad', 'Valor a costo'], D.consumos.map((x) => [fFecha(x.fecha), x.nombre, x.motivo, String(x.cant).replace('.', ','), Math.round(x.cant * x.costo)]));
+  bloque('CIERRES DE CAJA', ['Caja', 'Apertura', 'Cierre', 'Cerró', 'Ingresos', 'Egresos', 'Saldo'], D.cierres.map((x) => [CAJAS[x.tipo || 'efectivo'].c, fFH(x.apertura), fFH(x.cierre), x.cierraUsuario || '', x.ingresos ?? '', x.egresos ?? '', saldoCierre(x)]));
+  const blob = new Blob(['\ufeff' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `informe-${D.desde}${D.desde !== D.hasta ? '_al_' + D.hasta : ''}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  toast('Informe descargado. Ábralo con Excel.', 'ok', 'Excel');
+}
+
 VIEWS.estadisticas = (el) => {
   const [desde, hasta] = rangoStats();
   const vs = ventasRango(desde, hasta); const gsT = gastosRango(desde, hasta);
@@ -2575,7 +2766,7 @@ VIEWS.config = (el) => {
   $('#cLimpiar').onclick = async () => {
     if (algunaCaja()) { toast('Cierre las cajas antes de borrar los movimientos.', 'warn'); return; }
     if (await confirmar('¿Borrar todas las ventas, gastos, clientes, créditos y cierres de caja? Se recomienda descargar un respaldo antes.', { title: 'Borrar movimientos', ok: 'Sí, borrar todo', danger: true })) {
-      Object.assign(db, { ventas: [], gastos: [], clientes: [], movimientos: [], cajas: [], consumos: [] }); db.config.nroVenta = 0; db.config.demo = false; save(); renderView(); renderTopPill(); toast('Movimientos borrados');
+      Object.assign(db, { ventas: [], gastos: [], clientes: [], movimientos: [], cajas: [], consumos: [], ingresos: [] }); db.config.nroVenta = 0; db.config.demo = false; save(); renderView(); renderTopPill(); toast('Movimientos borrados');
     }
   };
   $('#cReset').onclick = async () => {
